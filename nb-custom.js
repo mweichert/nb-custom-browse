@@ -83,6 +83,7 @@ async function getData(el) {
 	
     // Compute query
     const tags = el.getAttribute("data-tags")
+    if (tags) tags
         .trim()
         .split(",")
         .map(t => `#${t}`)
@@ -207,5 +208,5 @@ async function getData(el) {
 /*
 Examples:
 
-<div data-query="type" data-tags="work,30m" data-exclude-tags="epic" data-limit="5" data-status="open|closed" due="today|tomorrow|this week|next week|this month|pastdue|2023|2023-10|2023-10-01" data-due-before="" data-due-after=""></div>
+<div data-query="" data-tags="work,30m" data-exclude-tags="epic" data-limit="5" data-status="open|closed" due="today|tomorrow|this week|next week|this month|pastdue|2023|2023-10|2023-10-01" data-due-before="" data-due-after=""></div>
 */
