@@ -3,71 +3,95 @@ document.addEventListener('DOMContentLoaded', (event) => {
     elements.forEach(el => getData(el));
 });
 
-function toListFormat(htmlString) {
-	// Create a new DOMParser instance
-	const parser = new DOMParser();
+async function toJsonFormat(html) {
+    const chrono = await import("https://esm.sh/chrono-node@2.7.0");
+    debugger;
 
-	// Parse the string as 'text/html'
-	const doc = parser.parseFromString(htmlString, 'text/html');
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const anchors = doc.querySelectorAll('a.list-item');
+    const items = Array.from(anchors).map(anchor => {
+        const spans = anchor.querySelectorAll('span.identifier');
+        const path = spans[0].textContent.trim();
+        const isChecked = anchor.innerHTML.includes('✔️');
+        const status = anchor.innerText.match(/\[\s+]/) ? 'open' : 'closed';
 
-	// Create a list element
-	const list = document.createElement('div');
+        // Remove all spans - they're not needed any more
+        Array.from(anchor.querySelectorAll('span')).map(span => span.remove());
 
-	// Get all list items
-	const items = doc.querySelectorAll('.list-item');
+        // Get the unparsed Title
+        let title = anchor.innerText.substring(6)
 
-	// Insert list items for each link
-	items.forEach(item => {
-		 // Create a list item
-		 const listItem = document.createElement('div');
-		 
-		 // Extract the URL from the original link
-		 const url = item.getAttribute('href');
+        // Get tags
+        let tags = title.match(/#\w+/g) ?? []
 
-		 // Create a new anchor element
-		 const link = document.createElement('a');
-		 link.setAttribute('href', url);
+        // Remove tags from title
+        title = tags.reduce(
+            (retval, tag) => retval.replace(tag, '').trim(),
+            title
+        )
 
-		  // Remove the first three span elements
-		 const spansToRemove = item.querySelectorAll('span.muted, span.identifier');
-		 spansToRemove.forEach((span, index) => {
-		   if (index < 3) span.remove();
-		 });
+        // Remove hash from tags
+        tags = tags.map(tag => tag.replace('#', ''))
 
-		 // Extract and keep the icon (assuming it is the first character)
-		 const icon = item.textContent.trim().charAt(0);
-		 
-		 // Extract the text content, exclude the identifier and brackets and icon
-		 let textContent = item.textContent.replace(/\s{2,}\[.*?\]/g, '').trim().substring(1);
+        // Get due date
+        let due = title.match(/(\(\@.*\))/)
+        due = due ? due[0] : null
 
-		 // Add icon to list item
-		 const span = document.createElement('a');
-		 span.innerHTML = icon;
-		 listItem.appendChild(span);
+        // Remove the due date from the title
+        title = due ? title.replace(due, '').trim() : title
 
-		 // Append the link to the list item
-		 listItem.appendChild(link);
-		 link.innerHTML = textContent;
-		 list.appendChild(listItem);
-	});
+        // Remove the brackets from the due date
+        due = due ? due.replace(/[\(\)\@]/g, '').trim() : due
 
-	return list.innerHTML;
+        // Parse due date
+        if (due) {
+            due = chrono.parseDate(due)
+        }
+
+        return {
+            path: path,
+            icon: isChecked ? '✔️' : '📝',
+            type: isChecked ? 'task' : 'note',
+            status: status,
+            title: title.trim(),
+            due: due,
+            tags: tags
+        };
+  });
+
+  return items;
+}
+
+function formatResult(json) {
+    return json.map(item => {
+        let linkText = `${item.title}`
+        if (item.due) {
+            linkText += ` (${item.due.toLocaleDateString()})`
+        }
+
+        const link = `<a href="${item.path}">${linkText}</a>`
+        const tags = item.tags.map(tag => `#${tag}`).join(' ')
+
+        return `<div>${item.icon} ${link} ${tags}</div>`
+    }).join("\n")
 }
 
 // Gets data from the nb server using queries defined in element attributes and renders the result inline
 async function getData(el) {
-    let query = encodeURIComponent(el.getAttribute("data-query"))
+    let query = el.getAttribute("data-query") ?? ''
 	
-    // If no query, then use tags
-	if (!query) {
-		let tags = el.getAttribute("data-tags")
-			.trim()
-			.split(",")
-			.map(t => `#${t}`)
-			.join(' ')
+    // Compute query
+    const tags = el.getAttribute("data-tags")
+        .trim()
+        .split(",")
+        .map(t => `#${t}`)
+        .join(' ')
+    
+    if (tags) query += ` ${tags}`
 
-		query = encodeURIComponent(tags);
-	}
+    // Encode query
+    query = encodeURIComponent(query.trim());
 
     // Get the data from the nb server
     const src = `/home:?--query=${query}`;
@@ -77,6 +101,111 @@ async function getData(el) {
     const doc = parser.parseFromString(html_str, 'text/html');
     const found = doc.querySelector('.item-list');
 
-    // Render the result
-    el.innerHTML = toListFormat(found.outerHTML);
+    // Convert to JSON
+    const json = await toJsonFormat(found.innerHTML);
+
+    // Filter by type
+    const typeFilter = el.getAttribute("data-type")
+    if (typeFilter) {
+        json = json.filter(item => typeFilter.trim().split(",").map(t => t.trim()).includes(item.type))
+    }
+
+    // Exclude tags
+    const excludeTags = el.getAttribute("data-exclude-tags")
+    if (excludeTags) {
+        json = json.filter(item => !item.tags.some(t => excludeTags.trim().split(",").map(t => t.trim()).includes(t)))
+    }
+
+    // Filter by status
+    const statusFilter = el.getAttribute("data-status")
+    if (statusFilter) {
+        json = json.filter(item => statusFilter.trim().split(",").map(t => t.trim()).includes(item.status))
+    }
+
+    // Filter by due date
+    let dueFilter = el.getAttribute("data-due")
+    if (dueFilter) {
+        dueFilter = dueFilter.trim()
+        if (dueFilter === 'today' || dueFilter === "tomorrow") {
+            dueFilter = chrono.parseDate(dueFilter)
+            json = json.filter(item => item.due && item.due.toDateString() === dueFilter.toDateString())
+        }
+        else if (dueFilter == "this week") {
+            const today = new Date()
+            const startOfWeek = new Date(today.setDate(today.getDate() - today.getDay()))
+            const endOfWeek = new Date(today.setDate(today.getDate() - today.getDay() + 6))
+            json = json.filter(item => item.due && item.due >= startOfWeek && item.due <= endOfWeek)
+        }
+        else if (dueFilter == "next week") {
+            const today = new Date()
+            const startOfWeek = new Date(today.setDate(today.getDate() - today.getDay() + 7))
+            const endOfWeek = new Date(today.setDate(today.getDate() - today.getDay() + 13))
+            json = json.filter(item => item.due && item.due >= startOfWeek && item.due <= endOfWeek)
+        }
+        else if (dueFilter == "last week") {
+            const today = new Date()
+            const startOfWeek = new Date(today.setDate(today.getDate() - today.getDay() - 7))
+            const endOfWeek = new Date(today.setDate(today.getDate() - today.getDay() - 1))
+            json = json.filter(item => item.due && item.due >= startOfWeek && item.due <= endOfWeek)
+        }
+        else if (dueFilter == "this month") {
+            const today = new Date()
+            const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1)
+            const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0)
+            json = json.filter(item => item.due && item.due >= startOfMonth && item.due <= endOfMonth)
+        }
+        else if (dueFilter == "next month") {
+            const today = new Date()
+            const startOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1)
+            const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 2, 0)
+            json = json.filter(item => item.due && item.due >= startOfMonth && item.due <= endOfMonth)
+        }
+        else if (dueFilter == "last month") {
+            const today = new Date()
+            const startOfMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1)
+            const endOfMonth = new Date(today.getFullYear(), today.getMonth(), 0)
+            json = json.filter(item => item.due && item.due >= startOfMonth && item.due <= endOfMonth)
+        }
+        else if (dueFilter == "this year") {
+            const today = new Date()
+            const startOfYear = new Date(today.getFullYear(), 0, 1)
+            const endOfYear = new Date(today.getFullYear(), 11, 31)
+            json = json.filter(item => item.due && item.due >= startOfYear && item.due <= endOfYear)
+        }
+        else if (dueFilter == "next year") {
+            const today = new Date()
+            const startOfYear = new Date(today.getFullYear() + 1, 0, 1)
+            const endOfYear = new Date(today.getFullYear() + 1, 11, 31)
+            json = json.filter(item => item.due && item.due >= startOfYear && item.due <= endOfYear)
+        }
+        else if (dueFilter == "last year") {
+            const today = new Date()
+            const startOfYear = new Date(today.getFullYear() - 1, 0, 1)
+            const endOfYear = new Date(today.getFullYear() - 1, 11, 31)
+            json = json.filter(item => item.due && item.due >= startOfYear && item.due <= endOfYear)
+        }
+    }
+
+    // Filter by due date before
+    let dueBeforeFilter = el.getAttribute("data-due-before")
+    if (dueBeforeFilter) {
+        dueBeforeFilter = chrono.parseDate(dueBeforeFilter)
+        json = json.filter(item => item.due && item.due <= dueBeforeFilter)
+    }
+
+    // Filter by due date after
+    let dueAfterFilter = el.getAttribute("data-due-after")
+    if (dueAfterFilter) {
+        dueAfterFilter = chrono.parseDate(dueAfterFilter)
+        json = json.filter(item => item.due && item.due >= dueAfterFilter)
+    }
+
+    // Return formatted result
+    el.innerHTML = formatResult(json)
 }
+
+/*
+Examples:
+
+<div data-query="type" data-tags="work,30m" data-exclude-tags="epic" data-limit="5" data-status="open|closed" due="today|tomorrow|this week|next week|this month|pastdue|2023|2023-10|2023-10-01" data-due-before="" data-due-after=""></div>
+*/
