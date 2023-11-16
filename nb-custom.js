@@ -1,7 +1,61 @@
 document.addEventListener('DOMContentLoaded', (event) => {
-    const elements = document.querySelectorAll('[data-query]');
-    elements.forEach(el => getData(el));
+    Promise.all([
+        executeNbQueries(),
+        addRunnableCodeBlocks()
+    ])
 });
+
+
+
+async function addRunnableCodeBlocks() {
+    const elements = Array.from(document.querySelectorAll('code.sourceCode.javascript'));
+    return Promise.all(elements.map(addRunButtonToCodeElement))
+}
+
+async function executeNbQueries() {
+    const elements = Array.from(document.querySelectorAll('[data-query]'));
+    return Promise.all(elements.map(getData))
+}
+
+function addRunButtonToCodeElement(codeEl) {
+    // 1. Creating the Run Button
+    let runButton = document.createElement('button');
+    runButton.textContent = 'Run';
+    const sourceCodePre = codeEl.parentNode
+    const sourceCodeDiv = sourceCodePre.parentNode;
+    sourceCodeDiv.insertBefore(runButton, sourceCodePre);
+
+    function executeUserCode(userCode, pre) {
+        const originalConsoleLog = console.log;
+        console.log = function(...args) {
+            pre.textContent += args.join(' ') + '\n';
+        };
+
+        try {
+            eval(userCode);
+        } catch (error) {
+            pre.textContent += 'Error: ' + error.message;
+        }
+
+        // Restore original console.log
+        console.log = originalConsoleLog;
+    }
+
+    // 2. Adding Event Listener to Button
+    runButton.addEventListener('click', function() {
+        // a) Adding DIV below code element
+        let outputDiv = document.createElement('div');
+        outputDiv.className = 'runOutput';
+        sourceCodeDiv.append(outputDiv);
+
+        // b) Appending Output Text and PRE tag
+        outputDiv.innerHTML = '<b>Output:</b><br/><pre></pre>';
+        let pre = outputDiv.querySelector('pre');
+
+        executeUserCode(codeEl.textContent, pre);        
+    });
+}
+
 
 async function toJsonFormat(html) {
     const chrono = await import("https://esm.sh/chrono-node@2.7.0");
@@ -14,7 +68,20 @@ async function toJsonFormat(html) {
         const spans = anchor.querySelectorAll('span.identifier');
         const path = spans[0].textContent.trim();
         const isChecked = anchor.innerHTML.includes('✔️');
+        const isPinned = anchor.innerHTML.includes('📌');
         const status = anchor.innerText.match(/\[\s+]/) ? 'open' : 'closed';
+
+        // Determine type and icon
+        let type = 'note';
+        let icon = '📝';
+        if (isChecked) {
+            type = 'task';
+            icon = '✔️';
+        }
+        else if (anchor.innerHTML.includes('📂')) {
+            type = 'folder';
+            icon = '📂';
+        }
 
         // Remove all spans - they're not needed any more
         Array.from(anchor.querySelectorAll('span')).map(span => span.remove());
@@ -51,8 +118,9 @@ async function toJsonFormat(html) {
 
         return {
             path: path,
-            icon: isChecked ? '✔️' : '📝',
-            type: isChecked ? 'task' : 'note',
+            pinned: isPinned,
+            icon,
+            type,
             status: status,
             title: title.trim(),
             due: due,
