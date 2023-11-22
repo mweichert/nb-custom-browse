@@ -1,0 +1,12 @@
+.found-note {
+    list-style-type: none;
+}
+
+.note {
+    margin-bottom: 1em;
+}
+
+.note .note-tags a{
+    font-size: 0.8em;
+    color: #999 !important;
+}
